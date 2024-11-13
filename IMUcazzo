@@ -1,0 +1,124 @@
+#include <Wire.h>
+#include <MPU6050.h>
+
+// Define a simple Vector structure if the library doesn't provide one
+struct Vector {
+  float x;
+  float y;
+  float z;
+};
+
+MPU6050 imu1; // Primo MPU6050
+MPU6050 imu2; // Secondo MPU6050
+
+float pitch1, roll1;
+float pitch2, roll2;
+
+float filteredPitch1 = 0, filteredRoll1 = 0;
+float filteredPitch2 = 0, filteredRoll2 = 0;
+
+const float alpha = 0.98; // Coefficiente per il filtro complementare
+
+// Offset per la calibrazione
+float gyroOffset1[3] = {0, 0, 0}; // Giroscopio per IMU 1
+float accelOffset1[3] = {0, 0, 0}; // Accelerometro per IMU 1
+float gyroOffset2[3] = {0, 0, 0}; // Giroscopio per IMU 2
+float accelOffset2[3] = {0, 0, 0}; // Accelerometro per IMU 2
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+
+  // Inizializza i sensori
+  imu1.initialize();
+  imu2.initialize();
+
+  // Verifica se gli IMU sono correttamente collegati
+  if (!imu1.testConnection() || !imu2.testConnection()) {
+    Serial.println("Errore nella connessione degli IMU");
+    while (1);
+  }
+
+  // Calibrazione migliorata
+  calibrateIMU(imu1, gyroOffset1, accelOffset1);
+  calibrateIMU(imu2, gyroOffset2, accelOffset2);
+}
+
+void loop() {
+  // Leggi i dati dai sensori
+  Vector normAccel1 = imu1.readNormalizeAccel();
+  Vector normGyro1 = imu1.readNormalizeGyro();
+
+  Vector normAccel2 = imu2.readNormalizeAccel();
+  Vector normGyro2 = imu2.readNormalizeGyro();
+
+  // Applica gli offset di calibrazione
+  normGyro1.x -= gyroOffset1[0];
+  normGyro1.y -= gyroOffset1[1];
+  normGyro1.z -= gyroOffset1[2];
+
+  normGyro2.x -= gyroOffset2[0];
+  normGyro2.y -= gyroOffset2[1];
+  normGyro2.z -= gyroOffset2[2];
+
+  // Calcola pitch e roll per IMU 1
+  pitch1 = atan2(normAccel1.y, normAccel1.z) * 180 / M_PI;
+  roll1 = atan2(normAccel1.x, normAccel1.z) * 180 / M_PI;
+
+  // Calcola pitch e roll per IMU 2
+  pitch2 = atan2(normAccel2.y, normAccel2.z) * 180 / M_PI;
+  roll2 = atan2(normAccel2.x, normAccel2.z) * 180 / M_PI;
+
+  // Applica il filtro complementare
+  filteredPitch1 = alpha * (filteredPitch1 + normGyro1.x * 0.01) + (1 - alpha) * pitch1;
+  filteredRoll1 = alpha * (filteredRoll1 + normGyro1.y * 0.01) + (1 - alpha) * roll1;
+
+  filteredPitch2 = alpha * (filteredPitch2 + normGyro2.x * 0.01) + (1 - alpha) * pitch2;
+  filteredRoll2 = alpha * (filteredRoll2 + normGyro2.y * 0.01) + (1 - alpha) * roll2;
+
+  // Calcola l'inclinazione reciproca
+  float pitchDifference = filteredPitch1 - filteredPitch2;
+  float rollDifference = filteredRoll1 - filteredRoll2;
+
+  // Stampa i risultati
+  Serial.print("Pitch IMU1: "); Serial.print(filteredPitch1); Serial.print("° ");
+  Serial.print("Roll IMU1: "); Serial.print(filteredRoll1); Serial.print("° ");
+  Serial.print("| Pitch IMU2: "); Serial.print(filteredPitch2); Serial.print("° ");
+  Serial.print("Roll IMU2: "); Serial.print(filteredRoll2); Serial.print("° ");
+  Serial.print("| Diff. Pitch: "); Serial.print(pitchDifference); Serial.print("° ");
+  Serial.print("Diff. Roll: "); Serial.print(rollDifference); Serial.print("° ");
+  Serial.println();
+
+  delay(100); // Ritardo per limitare la frequenza di stampa
+}
+
+// Funzione per calibrare l'IMU
+void calibrateIMU(MPU6050 &imu, float* gyroOffsets, float* accelOffsets) {
+  int numSamples = 1000;
+  float gyroSum[3] = {0, 0, 0};
+  float accelSum[3] = {0, 0, 0};
+
+  Serial.println("Calibrating IMU... Please keep IMU still.");
+  delay(2000); // Give user time to position IMU
+
+  for (int i = 0; i < numSamples; i++) {
+    Vector gyro = imu.readNormalizeGyro();
+    Vector accel = imu.readNormalizeAccel();
+    gyroSum[0] += gyro.x;
+    gyroSum[1] += gyro.y;
+    gyroSum[2] += gyro.z;
+    accelSum[0] += accel.x;
+    accelSum[1] += accel.y;
+    accelSum[2] += accel.z;
+    delay(1);
+  }
+
+  gyroOffsets[0] = gyroSum[0] / numSamples;
+  gyroOffsets[1] = gyroSum[1] / numSamples;
+  gyroOffsets[2] = gyroSum[2] / numSamples;
+  accelOffsets[0] = accelSum[0] / numSamples;
+  accelOffsets[1] = accelSum[1] / numSamples;
+  accelOffsets[2] = accelSum[2] / numSamples;
+
+  Serial.println("Calibration complete.");
+}
